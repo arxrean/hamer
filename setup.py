@@ -16,8 +16,8 @@ setup(
         'torch',
         'torchvision',
         'yacs',
-        'detectron2 @ git+https://github.com/facebookresearch/detectron2',
-        'chumpy @ git+https://github.com/mattloper/chumpy',
+        # 'detectron2 @ git+https://github.com/facebookresearch/detectron2',  # installed manually (CUDA 12.8 build); see env setup
+        # 'chumpy @ git+https://github.com/mattloper/chumpy',  # installed manually (--no-build-isolation; setup.py imports pip)
         'mmcv==1.3.9',
         'timm',
         'einops',
