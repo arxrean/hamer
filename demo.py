@@ -4,6 +4,7 @@ import argparse
 import os
 import cv2
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from hamer.configs import CACHE_DIR_HAMER
 from hamer.models import HAMER, download_models, load_hamer, DEFAULT_CHECKPOINT
@@ -95,18 +96,11 @@ def main():
         bboxes = []
         is_right = []
 
-        # Use hands based on hand keypoint detections
+        # Use only right-hand keypoint detections (target data has no left hands)
         for vitposes in vitposes_out:
-            left_hand_keyp = vitposes['keypoints'][-42:-21]
             right_hand_keyp = vitposes['keypoints'][-21:]
 
             # Rejecting not confident detections
-            keyp = left_hand_keyp
-            valid = keyp[:,2] > 0.5
-            if sum(valid) > 3:
-                bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
-                bboxes.append(bbox)
-                is_right.append(0)
             keyp = right_hand_keyp
             valid = keyp[:,2] > 0.5
             if sum(valid) > 3:
@@ -149,29 +143,6 @@ def main():
                 # Get filename from path img_path
                 img_fn, _ = os.path.splitext(os.path.basename(img_path))
                 person_id = int(batch['personid'][n])
-                white_img = (torch.ones_like(batch['img'][n]).cpu() - DEFAULT_MEAN[:,None,None]/255) / (DEFAULT_STD[:,None,None]/255)
-                input_patch = batch['img'][n].cpu() * (DEFAULT_STD[:,None,None]/255) + (DEFAULT_MEAN[:,None,None]/255)
-                input_patch = input_patch.permute(1,2,0).numpy()
-
-                regression_img = renderer(out['pred_vertices'][n].detach().cpu().numpy(),
-                                        out['pred_cam_t'][n].detach().cpu().numpy(),
-                                        batch['img'][n],
-                                        mesh_base_color=LIGHT_BLUE,
-                                        scene_bg_color=(1, 1, 1),
-                                        )
-
-                if args.side_view:
-                    side_img = renderer(out['pred_vertices'][n].detach().cpu().numpy(),
-                                            out['pred_cam_t'][n].detach().cpu().numpy(),
-                                            white_img,
-                                            mesh_base_color=LIGHT_BLUE,
-                                            scene_bg_color=(1, 1, 1),
-                                            side_view=True)
-                    final_img = np.concatenate([input_patch, regression_img, side_img], axis=1)
-                else:
-                    final_img = np.concatenate([input_patch, regression_img], axis=1)
-
-                cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_{person_id}.png'), 255*final_img[:, :, ::-1])
 
                 # Add all verts and cams to list
                 verts = out['pred_vertices'][n].detach().cpu().numpy()
@@ -182,11 +153,25 @@ def main():
                 all_cam_t.append(cam_t)
                 all_right.append(is_right)
 
-                # Save all meshes to disk
-                if args.save_mesh:
-                    camera_translation = cam_t.copy()
-                    tmesh = renderer.vertices_to_trimesh(verts, camera_translation, LIGHT_BLUE, is_right=is_right)
-                    tmesh.export(os.path.join(args.out_folder, f'{img_fn}_{person_id}.obj'))
+                # Export hand pose for downstream retargeting (right hand, true camera space)
+                go_mat = out['pred_mano_params']['global_orient'][n].detach().cpu().numpy().reshape(3, 3)
+                hp_mat = out['pred_mano_params']['hand_pose'][n].detach().cpu().numpy().reshape(-1, 3, 3)
+                np.savez(
+                    os.path.join(args.out_folder, f'{img_fn}_{person_id}.npz'),
+                    is_right=np.asarray(is_right),
+                    global_orient_aa=Rotation.from_matrix(go_mat).as_rotvec().astype(np.float32),          # (3,)
+                    hand_pose_aa=Rotation.from_matrix(hp_mat).as_rotvec().reshape(-1).astype(np.float32),   # (45,)
+                    global_orient_rotmat=go_mat.astype(np.float32),                                         # (3, 3)
+                    hand_pose_rotmat=hp_mat.astype(np.float32),                                             # (15, 3, 3)
+                    betas=out['pred_mano_params']['betas'][n].detach().cpu().numpy().astype(np.float32),    # (10,)
+                    keypoints_3d=out['pred_keypoints_3d'][n].detach().cpu().numpy().astype(np.float32),     # (21, 3) root-rel, meters
+                    vertices=verts.astype(np.float32),                                                      # (778, 3)
+                    cam_t_full=cam_t.astype(np.float32),                                                    # (3,) full-frame translation
+                    focal_length=np.float32(float(scaled_focal_length)),                                    # scalar, principal point = image center
+                    img_size=img_size[n].detach().cpu().numpy().astype(np.float32),                         # (W, H)
+                    box_center=box_center[n].detach().cpu().numpy().astype(np.float32),                     # (2,)
+                    box_size=np.float32(float(box_size[n])),                                                # scalar
+                )
 
         # Render front view
         if args.full_frame and len(all_verts) > 0:
