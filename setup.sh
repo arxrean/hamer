@@ -21,3 +21,9 @@ pip install -v -e third-party/ViTPose
 pip install --no-build-isolation --force-reinstall --no-deps --no-binary xtcocotools xtcocotools
 
 bash fetch_demo_data.sh
+
+cd ~ && git clone https://github.com/dexsuite/dex-retargeting.git
+
+cd ~/dex-retargeting && git submodule update --init --recursive
+
+cd ~ && git clone https://github.com/google-deepmind/mujoco_menagerie.git
